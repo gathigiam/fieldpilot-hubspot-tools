@@ -380,6 +380,12 @@ def main():
 
     print("\n" + "="*80)
 
+    # Exit with non-zero status in dry-run mode if there are pending contact changes.
+    # This signals to scheduled checks (e.g., GitHub Actions) that action is needed.
+    # Duplicate domain findings are report-only and do not affect exit code.
+    if DRY_RUN and contact_changes:
+        sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
