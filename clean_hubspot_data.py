@@ -16,6 +16,7 @@ import os
 import re
 import sys
 import csv
+import difflib
 import requests
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -130,6 +131,48 @@ def normalize_domain(domain):
     return domain.lower().strip().replace("www.", "")
 
 
+def normalize_company_name(name):
+    """
+    Normalize company name for similarity comparison.
+    Removes business suffixes, common words, punctuation, and extra whitespace.
+    """
+    if not name:
+        return ""
+
+    # Lowercase
+    normalized = name.lower()
+
+    # Remove common business suffixes as whole words
+    suffixes = [
+        r'\bllc\b', r'\binc\b', r'\bincorporated\b', r'\bcorp\b',
+        r'\bcorporation\b', r'\bco\b', r'\bcompany\b', r'\bltd\b',
+        r'\bservices\b', r'\bgroup\b'
+    ]
+    for suffix in suffixes:
+        normalized = re.sub(suffix, '', normalized)
+
+    # Remove "&" and "and"
+    normalized = normalized.replace('&', ' ').replace(' and ', ' ')
+
+    # Remove remaining punctuation
+    normalized = re.sub(r'[^\w\s]', '', normalized)
+
+    # Collapse extra whitespace
+    normalized = ' '.join(normalized.split())
+
+    return normalized.strip()
+
+
+def name_similarity(name1, name2):
+    """
+    Calculate similarity ratio between two company names.
+    Returns a float between 0 (completely different) and 1 (identical).
+    """
+    normalized1 = normalize_company_name(name1)
+    normalized2 = normalize_company_name(name2)
+    return difflib.SequenceMatcher(None, normalized1, normalized2).ratio()
+
+
 def fetch_all_contacts():
     """Fetch all contacts from HubSpot."""
     contacts = []
@@ -157,7 +200,7 @@ def fetch_all_companies():
     """Fetch all companies from HubSpot."""
     companies = []
     url = "https://api.hubapi.com/crm/v3/objects/companies"
-    params = {"limit": 100, "properties": "name,domain"}
+    params = {"limit": 100, "properties": "name,domain,phone,city,state"}
 
     while url:
         response = requests.get(url, headers=HEADERS, params=params)
@@ -234,30 +277,73 @@ def clean_contacts(contacts):
 
 
 def find_duplicate_domains(companies):
-    """Find companies with duplicate or similar domains."""
+    """Find companies with duplicate or similar domains with confidence scoring."""
     domain_map = defaultdict(list)
+    company_data = {}  # Store full company data by ID
     duplicates = []
 
     for company in companies:
         props = company.get("properties", {})
         domain = props.get("domain", "")
         name = props.get("name", "")
+        phone = props.get("phone", "")
+        city = props.get("city", "")
+        state = props.get("state", "")
+
+        company_id = company["id"]
+        company_data[company_id] = {
+            "id": company_id,
+            "name": name,
+            "domain": domain,
+            "phone": phone,
+            "city": city,
+            "state": state
+        }
 
         if domain:
             normalized = normalize_domain(domain)
-            domain_map[normalized].append({
-                "id": company["id"],
-                "name": name,
-                "domain": domain
-            })
+            domain_map[normalized].append(company_id)
 
     # Find exact duplicates
-    for normalized_domain, company_list in domain_map.items():
-        if len(company_list) > 1:
+    for normalized_domain, company_ids in domain_map.items():
+        if len(company_ids) > 1:
+            companies_in_group = [company_data[cid] for cid in company_ids]
+
+            # Calculate confidence signals
+            name_sim = name_similarity(companies_in_group[0]["name"], companies_in_group[1]["name"])
+
+            # Phone match (only if both have phones)
+            phone1 = companies_in_group[0]["phone"]
+            phone2 = companies_in_group[1]["phone"]
+            phone_match = (phone1 and phone2 and phone1 == phone2) if (phone1 and phone2) else None
+
+            # Location match (both city AND state must match, only if both have values)
+            city1 = companies_in_group[0]["city"]
+            city2 = companies_in_group[1]["city"]
+            state1 = companies_in_group[0]["state"]
+            state2 = companies_in_group[1]["state"]
+            location_match = (city1 and city2 and state1 and state2 and
+                            city1 == city2 and state1 == state2) if (city1 and city2 and state1 and state2) else None
+
+            # Determine confidence
+            # REVIEW: High name similarity but phone AND location both explicitly differ (possible separate branches)
+            if name_sim >= 0.6 and phone_match is False and location_match is False:
+                confidence = "REVIEW"
+            # HIGH: Name similarity >= 0.6, OR phone matches, OR location matches
+            elif name_sim >= 0.6 or phone_match or location_match:
+                confidence = "HIGH"
+            # LOW: No corroborating signals
+            else:
+                confidence = "LOW"
+
             duplicates.append({
                 "domain": normalized_domain,
-                "companies": company_list,
-                "type": "exact_duplicate"
+                "companies": companies_in_group,
+                "type": "exact_duplicate",
+                "confidence": confidence,
+                "name_similarity": name_sim,
+                "phone_match": phone_match,
+                "location_match": location_match
             })
 
     # Find similar domains (different by hyphens/underscores only)
@@ -271,16 +357,49 @@ def find_duplicate_domains(companies):
     for similarity_key, domain_list in similar_groups.items():
         if len(domain_list) > 1:
             # Collect all companies for these similar domains
-            all_companies = []
+            all_company_ids = []
             for domain in domain_list:
-                all_companies.extend(domain_map[domain])
+                all_company_ids.extend(domain_map[domain])
+
+            companies_in_group = [company_data[cid] for cid in all_company_ids]
 
             # Only add if not already flagged as exact duplicate
             if not any(d["domain"] in domain_list for d in duplicates):
+                # Calculate confidence signals
+                name_sim = name_similarity(companies_in_group[0]["name"], companies_in_group[1]["name"])
+
+                # Phone match
+                phone1 = companies_in_group[0]["phone"]
+                phone2 = companies_in_group[1]["phone"]
+                phone_match = (phone1 and phone2 and phone1 == phone2) if (phone1 and phone2) else None
+
+                # Location match
+                city1 = companies_in_group[0]["city"]
+                city2 = companies_in_group[1]["city"]
+                state1 = companies_in_group[0]["state"]
+                state2 = companies_in_group[1]["state"]
+                location_match = (city1 and city2 and state1 and state2 and
+                                city1 == city2 and state1 == state2) if (city1 and city2 and state1 and state2) else None
+
+                # Determine confidence
+                # REVIEW: High name similarity but phone AND location both explicitly differ (possible separate branches)
+                if name_sim >= 0.6 and phone_match is False and location_match is False:
+                    confidence = "REVIEW"
+                # HIGH: Name similarity >= 0.6, OR phone matches, OR location matches
+                elif name_sim >= 0.6 or phone_match or location_match:
+                    confidence = "HIGH"
+                # LOW: No corroborating signals
+                else:
+                    confidence = "LOW"
+
                 near_duplicates.append({
                     "domains": domain_list,
-                    "companies": all_companies,
-                    "type": "near_duplicate"
+                    "companies": companies_in_group,
+                    "type": "near_duplicate",
+                    "confidence": confidence,
+                    "name_similarity": name_sim,
+                    "phone_match": phone_match,
+                    "location_match": location_match
                 })
 
     return duplicates, near_duplicates
@@ -315,9 +434,26 @@ def print_report(contact_changes, exact_dupes, near_dupes):
 
     if exact_dupes:
         for dupe in exact_dupes:
-            print(f"\nDomain: {dupe['domain']}")
+            if dupe['confidence'] == "HIGH":
+                confidence_tag = "[HIGH]"
+            elif dupe['confidence'] == "REVIEW":
+                confidence_tag = "[REVIEW: POSSIBLE SEPARATE LOCATIONS]"
+            else:
+                confidence_tag = "[LOW - VERIFY CAREFULLY]"
+
+            print(f"\nDomain: {dupe['domain']} {confidence_tag}")
+            print(f"  Name similarity: {int(dupe['name_similarity'] * 100)}%")
+
             for company in dupe['companies']:
-                print(f"  - {company['name']} (ID: {company['id']}) - domain: {company['domain']}")
+                phone_display = f"phone: {company['phone']}" if company['phone'] else "phone: (none)"
+                location_display = f"{company['city']}, {company['state']}" if (company['city'] and company['state']) else "(no location)"
+                print(f"  - {company['name']} (ID: {company['id']})")
+                print(f"    domain: {company['domain']} | {phone_display} | {location_display}")
+
+            if dupe['confidence'] == "REVIEW":
+                print("  NOTE: Same/similar company name, but phone and location both differ.")
+                print("        This could be a duplicate entry, or these could be separate branches of the same business.")
+                print("        Check whether a parent-child company association already exists in HubSpot before merging.")
     else:
         print("  OK: No exact duplicate domains found!")
 
@@ -327,9 +463,26 @@ def print_report(contact_changes, exact_dupes, near_dupes):
 
     if near_dupes:
         for dupe in near_dupes:
-            print(f"\nSimilar domains: {', '.join(dupe['domains'])}")
+            if dupe['confidence'] == "HIGH":
+                confidence_tag = "[HIGH]"
+            elif dupe['confidence'] == "REVIEW":
+                confidence_tag = "[REVIEW: POSSIBLE SEPARATE LOCATIONS]"
+            else:
+                confidence_tag = "[LOW - VERIFY CAREFULLY]"
+
+            print(f"\nSimilar domains: {', '.join(dupe['domains'])} {confidence_tag}")
+            print(f"  Name similarity: {int(dupe['name_similarity'] * 100)}%")
+
             for company in dupe['companies']:
-                print(f"  - {company['name']} (ID: {company['id']}) - domain: {company['domain']}")
+                phone_display = f"phone: {company['phone']}" if company['phone'] else "phone: (none)"
+                location_display = f"{company['city']}, {company['state']}" if (company['city'] and company['state']) else "(no location)"
+                print(f"  - {company['name']} (ID: {company['id']})")
+                print(f"    domain: {company['domain']} | {phone_display} | {location_display}")
+
+            if dupe['confidence'] == "REVIEW":
+                print("  NOTE: Same/similar company name, but phone and location both differ.")
+                print("        This could be a duplicate entry, or these could be separate branches of the same business.")
+                print("        Check whether a parent-child company association already exists in HubSpot before merging.")
     else:
         print("  OK: No similar domains found!")
 
