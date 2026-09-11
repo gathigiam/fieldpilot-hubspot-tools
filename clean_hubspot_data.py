@@ -15,8 +15,10 @@ Usage:
 import os
 import re
 import sys
+import csv
 import requests
 from collections import defaultdict
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -200,18 +202,22 @@ def clean_contacts(contacts):
 
         # Check if any changes needed
         updates = {}
+        old_values = {}
         change_desc = []
 
         if firstname and new_firstname != firstname:
             updates["firstname"] = new_firstname
+            old_values["firstname"] = firstname
             change_desc.append(f"firstname: '{firstname}' -> '{new_firstname}'")
 
         if lastname and new_lastname != lastname:
             updates["lastname"] = new_lastname
+            old_values["lastname"] = lastname
             change_desc.append(f"lastname: '{lastname}' -> '{new_lastname}'")
 
         if phone and new_phone != phone:
             updates["phone"] = new_phone
+            old_values["phone"] = phone
             change_desc.append(f"phone: '{phone}' -> '{new_phone}'")
 
         if updates:
@@ -220,6 +226,7 @@ def clean_contacts(contacts):
                 "type": "contact",
                 "name": f"{firstname} {lastname}".strip(),
                 "updates": updates,
+                "old_values": old_values,
                 "description": ", ".join(change_desc)
             })
 
@@ -329,6 +336,23 @@ def print_report(contact_changes, exact_dupes, near_dupes):
     print("\n" + "="*80)
 
 
+def log_applied_change(contact_id, contact_name, property_name, old_value, new_value, status):
+    """Log an applied change to change_log.csv."""
+    log_file = "change_log.csv"
+    file_exists = os.path.isfile(log_file) and os.path.getsize(log_file) > 0
+
+    with open(log_file, 'a', newline='') as f:
+        writer = csv.writer(f)
+
+        # Write header if file is new or empty
+        if not file_exists:
+            writer.writerow(['timestamp', 'contact_id', 'contact_name', 'property', 'old_value', 'new_value', 'status'])
+
+        # Write log entry
+        timestamp = datetime.now(timezone.utc).isoformat()
+        writer.writerow([timestamp, contact_id, contact_name, property_name, old_value, new_value, status])
+
+
 # Company duplicate merging is intentionally report-only (requires human judgment).
 # This tool does not auto-merge or auto-apply changes to company records.
 def apply_changes(contact_changes):
@@ -340,6 +364,20 @@ def apply_changes(contact_changes):
 
     for change in contact_changes:
         success = update_contact(change['id'], change['updates'])
+        status = "success" if success else "failed"
+
+        # Log each property change
+        for property_name, new_value in change['updates'].items():
+            old_value = change['old_values'][property_name]
+            log_applied_change(
+                change['id'],
+                change['name'],
+                property_name,
+                old_value,
+                new_value,
+                status
+            )
+
         if success:
             success_count += 1
             print(f"  OK: Updated: {change['name']}")
