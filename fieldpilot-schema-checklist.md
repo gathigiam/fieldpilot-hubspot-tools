@@ -15,6 +15,9 @@ Fictional company: **FieldPilot** — subscription SaaS for HVAC/plumbing/electr
 | `accounting_sync_connected` | Boolean (checkbox) | QuickBooks-style integration milestone | Same as above |
 | `onboarding_status` | Dropdown | Not Started / In Progress / Live / Stalled | Handoff tool sets this on ticket creation |
 | `customer_since` | Date | Date the account first went Closed Won | **NRR tool's cohort anchor** — every account groups by the month this falls in |
+| `subscription_status` | Dropdown | Active / Churned | Synthetic data generator — set alongside `churned_date` and `monthly_recurring_revenue`, never independently |
+| `churned_date` | Date | Date the account churned (blank while active) | Synthetic data generator — the 6-month reactivation grace window is measured from this |
+| `synthetic_run_id` | Text | Stamped on every record a given run of the synthetic data generator creates | Synthetic data generator's own cleanup script (`cleanup_synthetic_data.py`) — finds and archives one run's records before a re-run, so cohorts don't layer across runs. Not read by any other tool. |
 
 ---
 
@@ -27,9 +30,10 @@ Fictional company: **FieldPilot** — subscription SaaS for HVAC/plumbing/electr
 
 | Property name | Type | Options / Notes | Used by |
 |---|---|---|---|
-| `deal_type` | Dropdown | New Business / Expansion / Downgrade / Renewal | **NRR tool depends on this** to separate new revenue from expansion/contraction |
-| `crew_size_requested` | Number | Feeds routing logic | Handoff tool (assigns onboarding specialist by size) |
+| `deal_type` | Dropdown | New Business / Expansion / Downgrade / Renewal / Reactivation / Churn | **NRR tool depends on this** to separate new revenue from expansion/contraction. Reactivation and Churn added for the synthetic data generator — see data-generator-spec.md's BLOCKING ACTION |
+| `crew_size_requested` | Number | Feeds routing logic. Synthetic data generator also reuses this for Expansion/Downgrade deals: always a positive seat-count magnitude, direction comes from `deal_type` | Handoff tool (assigns onboarding specialist by size), synthetic data generator |
 | `mrr_amount` | Number | Revenue this specific deal represents | Handoff tool (copies to Company), NRR tool |
+| `synthetic_run_id` | Text | Stamped on every deal a given run of the synthetic data generator creates | Synthetic data generator's own cleanup script only — see Company table above |
 
 > **`mrr_amount` vs. `monthly_recurring_revenue`:** `mrr_amount` is the *delta* this one deal represents — for a New Business deal, that's the account's starting MRR; for an Expansion or Downgrade deal, it's just the incremental change, not the account's new total. `monthly_recurring_revenue` (Company property, above) is the account's *current running total*. The NRR tool needs the per-deal deltas, not just the running total, to calculate expansion/contraction correctly.
 

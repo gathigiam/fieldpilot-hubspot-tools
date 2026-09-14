@@ -2,3 +2,8 @@ venv/
 .env
 __pycache__/
 change_log.csv
+dry_run_output.json
+interview-prep.md
+project-walkthrough.md
+interview-prep*.md
+project-walkthrough*.md
