@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FieldPilot &mdash; Revenue Retention</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #151A21;
+    --panel: #1B2027;
+    --border: #2A313B;
+    --text: #E8E4DC;
+    --text-muted: #8B93A1;
+    --copper: #C8823E;
+    --teal: #5B9AA0;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "IBM Plex Sans", sans-serif;
+    line-height: 1.5;
+  }
+
+  .wrap {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 4rem 1.5rem 6rem;
+  }
+
+  .company {
+    font-size: 0.95rem;
+    color: var(--text-muted);
+    font-weight: 500;
+    margin-bottom: 2rem;
+  }
+
+  .hero {
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 2.5rem;
+    margin-bottom: 2.5rem;
+  }
+
+  .hero-figure {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 4.5rem;
+    font-weight: 600;
+    color: var(--copper);
+    line-height: 1;
+  }
+
+  .hero-label {
+    font-size: 1rem;
+    color: var(--text-muted);
+    margin-top: 0.5rem;
+  }
+
+  .stat-row {
+    display: flex;
+    gap: 3rem;
+    margin-top: 2rem;
+    flex-wrap: wrap;
+  }
+
+  .stat-value {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 1.5rem;
+    font-weight: 600;
+  }
+
+  .stat-label {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin-top: 0.15rem;
+  }
+
+  section { margin-bottom: 3.5rem; }
+
+  h2 {
+    font-size: 1.15rem;
+    font-weight: 600;
+    margin-bottom: 1.25rem;
+  }
+
+  .heatmap-scroll { overflow-x: auto; }
+
+  table.heatmap {
+    border-collapse: collapse;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 0.85rem;
+    width: 100%;
+  }
+
+  table.heatmap th, table.heatmap td {
+    padding: 0.5rem 0.7rem;
+    text-align: center;
+    white-space: nowrap;
+  }
+
+  table.heatmap th {
+    color: var(--text-muted);
+    font-weight: 500;
+    font-size: 0.75rem;
+  }
+
+  table.heatmap td.cohort-label {
+    text-align: left;
+    color: var(--text);
+    font-weight: 500;
+  }
+
+  .chart-panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    padding: 1.5rem;
+    border-radius: 4px;
+  }
+
+  canvas { max-height: 360px; }
+
+  footer {
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    border-top: 1px solid var(--border);
+    padding-top: 1.5rem;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="company">FieldPilot &mdash; Revenue Operations</div>
+
+  <div class="hero">
+    <div class="hero-figure">{{ headline.blended_nrr }}%</div>
+    <div class="hero-label">Net Revenue Retention, as of {{ headline.latest_month }}</div>
+
+    <div class="stat-row">
+      <div>
+        <div class="stat-value">{{ headline.blended_grr }}%</div>
+        <div class="stat-label">Gross Revenue Retention</div>
+      </div>
+      <div>
+        <div class="stat-value">${{ "{:,.0f}".format(headline.total_current_mrr) }}</div>
+        <div class="stat-label">Current MRR (active cohorts)</div>
+      </div>
+      <div>
+        <div class="stat-value">{{ headline.active_cohorts }}</div>
+        <div class="stat-label">Cohorts still generating</div>
+      </div>
+    </div>
+  </div>
+
+  <section>
+    <h2>Cohort Retention Heatmap</h2>
+    <div class="heatmap-scroll">
+      <table class="heatmap">
+        <thead>
+          <tr>
+            <th style="text-align:left;">Cohort</th>
+            {% for m in range(heatmap_rows[0].cells|length if heatmap_rows else 0) %}
+              <th>M{{ m }}</th>
+            {% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in heatmap_rows %}
+          <tr>
+            <td class="cohort-label">{{ row.label }}</td>
+            {% for cell in row.cells %}
+              <td style="background:{{ cell.bg }}; color:{{ cell.text }};">{{ cell.value }}</td>
+            {% endfor %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Retention Curves by Cohort</h2>
+    <div class="chart-panel">
+      <canvas id="curvesChart"></canvas>
+    </div>
+  </section>
+
+  <section>
+    <h2>Monthly MRR Movement</h2>
+    <div class="chart-panel">
+      <canvas id="movementChart"></canvas>
+    </div>
+  </section>
+
+  <footer>
+    FieldPilot is a fictional company built for portfolio purposes. Data refreshes nightly from HubSpot via a scheduled job.
+  </footer>
+
+</div>
+
+<script>
+  const curveSeries = {{ curve_series | tojson }};
+  const movement = {{ movement | tojson }};
+
+  const palette = ["#C8823E", "#5B9AA0", "#A9B24A", "#8C7BC4", "#C4707E", "#6FA98C", "#D4A24C", "#7B93C4"];
+
+  new Chart(document.getElementById("curvesChart"), {
+    type: "line",
+    data: {
+      labels: curveSeries.length ? curveSeries[0].data.map((_, i) => "M" + i) : [],
+      datasets: curveSeries.map((s, i) => ({
+        label: s.label,
+        data: s.data,
+        borderColor: palette[i % palette.length],
+        backgroundColor: "transparent",
+        spanGaps: false,
+        tension: 0.2,
+        pointRadius: 2,
+      })),
+    },
+    options: {
+      responsive: true,
+      interaction: { mode: "nearest", intersect: false },
+      scales: {
+        x: { ticks: { color: "#8B93A1" }, grid: { color: "#2A313B" } },
+        y: { ticks: { color: "#8B93A1" }, grid: { color: "#2A313B" }, title: { display: true, text: "NRR %", color: "#8B93A1" } },
+      },
+      plugins: {
+        legend: { position: "bottom", labels: { color: "#E8E4DC", boxWidth: 12, font: { family: "IBM Plex Mono", size: 11 } } },
+      },
+    },
+  });
+
+  new Chart(document.getElementById("movementChart"), {
+    type: "bar",
+    data: {
+      labels: movement.labels,
+      datasets: [
+        { label: "Expansion", data: movement.expansion, backgroundColor: "#6FA98C" },
+        { label: "Reactivation", data: movement.reactivation, backgroundColor: "#A9B24A" },
+        { label: "Contraction", data: movement.contraction, backgroundColor: "#C8823E" },
+        { label: "Churn", data: movement.churn, backgroundColor: "#B84C3C" },
+      ],
+    },
+    options: {
+      responsive: true,
+      scales: {
+        x: { stacked: true, ticks: { color: "#8B93A1" }, grid: { display: false } },
+        y: { stacked: true, ticks: { color: "#8B93A1" }, grid: { color: "#2A313B" }, title: { display: true, text: "MRR ($)", color: "#8B93A1" } },
+      },
+      plugins: {
+        legend: { position: "bottom", labels: { color: "#E8E4DC", boxWidth: 12, font: { family: "IBM Plex Mono", size: 11 } } },
+      },
+    },
+  });
+</script>
+</body>
+</html>
